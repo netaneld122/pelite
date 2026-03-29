@@ -719,11 +719,14 @@ unsafe fn slice_file(image: &[u8], rva: Rva, min_size_of: usize, align_of: usize
 	if rva == 0 {
 		Err(Error::Null)
 	}
-	else if !usize::wrapping_add(image.as_ptr() as usize, rva as usize).aligned_to(align_of) {
-		Err(Error::Misaligned)
-	}
 	else {
-		range_file(image, rva, min_size_of)
+		let bytes = range_file(image, rva, min_size_of)?;
+		if !bytes.as_ptr().aligned_to(align_of) {
+			Err(Error::Misaligned)
+		}
+		else {
+			Ok(bytes)
+		}
 	}
 }
 #[inline(never)]
@@ -738,11 +741,12 @@ unsafe fn read_file(image: &[u8], image_base: Va, va: Va, min_size_of: usize, al
 	}
 	else {
 		let rva = (va - image_base) as Rva;
-		if !usize::wrapping_add(image.as_ptr() as usize, rva as usize).aligned_to(align_of) {
+		let bytes = range_file(image, rva, min_size_of)?;
+		if !bytes.as_ptr().aligned_to(align_of) {
 			Err(Error::Misaligned)
 		}
 		else {
-			range_file(image, rva, min_size_of)
+			Ok(bytes)
 		}
 	}
 }
@@ -757,7 +761,7 @@ pub(crate) fn validate_headers(image: &[u8]) -> Result<u32> {
 		return Err(Error::Bounds);
 	}
 	// Check basic alignment of the image bytes
-	if !image.as_ptr().aligned_to(4) {
+	if !image.as_ptr().aligned_to(mem::align_of::<IMAGE_DOS_HEADER>()) {
 		return Err(Error::Misaligned);
 	}
 	let dos = unsafe { &*(image.as_ptr() as *const IMAGE_DOS_HEADER) };
@@ -780,7 +784,11 @@ pub(crate) fn validate_headers(image: &[u8]) -> Result<u32> {
 	if nt_end > image.len() {
 		return Err(Error::Bounds);
 	}
-	let nt = unsafe { &*(image.as_ptr().offset(dos.e_lfanew as isize) as *const IMAGE_NT_HEADERS) };
+	let nt_ptr = unsafe { image.as_ptr().offset(dos.e_lfanew as isize) };
+	if !nt_ptr.aligned_to(mem::align_of::<IMAGE_NT_HEADERS>()) {
+		return Err(Error::Misaligned);
+	}
+	let nt = unsafe { &*(nt_ptr as *const IMAGE_NT_HEADERS) };
 	// Verify the NT headers
 	if nt.Signature != IMAGE_NT_HEADERS_SIGNATURE || !(nt.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC || nt.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC) {
 		return Err(Error::BadMagic);
